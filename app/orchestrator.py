@@ -43,7 +43,7 @@ SEARCH_HINTS = re.compile(
     re.I,
 )
 EXPLICIT_SEARCH = re.compile(
-    r"\b(search (?:the )?(?:web|online)|web search|look ?up|look online|check online|"
+    r"\b(search (?:the )?(?:web|online|for)|web search|look ?up|look online|check online|"
     r"browse|google|find (?:this )?online)\b",
     re.I,
 )
