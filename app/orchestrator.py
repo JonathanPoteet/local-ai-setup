@@ -1,19 +1,4 @@
-"""Slim orchestrator.
-
-Flow: route requests to a specific tool when appropriate; otherwise retrieve local
-knowledge and answer with the configured chat model.
-
-The model never decides to call tools; this code does. Drop-in replacement for the old
-orchestrator.py: main.py needs no changes.
-
-Environment variables (all optional):
-  CHAT_BASE_URL   default http://127.0.0.1:8081/v1
-  EMBED_BASE_URL  default http://127.0.0.1:8082/v1
-  CHAT_MODEL      chat model id (default: first non-embedding model)
-  SMALL_MODEL     legacy alias for CHAT_MODEL
-  EMBED_MODEL     embedding model id (default: last id listed)
-  SEMANTIC_ROUTING  set to 0 to use regex routing only
-"""
+"""Route requests to tools or the local chat model."""
 import logging
 import os
 import re
@@ -21,12 +6,10 @@ import time
 from datetime import datetime
 
 import numpy as np
-import requests
 from fastapi import HTTPException
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
 
-from runtime import embedder
+from runtime import chat_model, chat_model_id, embedder
 from tools.knowledge import (
     cleanup_expired_temporary_collections,
     persistent_documents,
@@ -34,59 +17,13 @@ from tools.knowledge import (
 )
 from tools.headlines import matches as is_headlines_request, run as run_headlines
 from tools.reference_lookup import (
-    format_excerpts,
     matches as is_reference_lookup,
     run as run_reference_lookup,
 )
-from tools.web_search import normalize_search_query, search_web
+from tools.web_search import format_excerpts, is_letter_request, run_search
 
 _log = logging.getLogger(__name__)
-
-CHAT_URL = os.environ.get("CHAT_BASE_URL", "http://127.0.0.1:8081/v1")
-CHAT_MODEL = os.environ.get("CHAT_MODEL") or os.environ.get("SMALL_MODEL")
 SEMANTIC_ROUTING = os.environ.get("SEMANTIC_ROUTING", "1") != "0"
-
-# ---------------------------------------------------------------------------
-# Models
-# ---------------------------------------------------------------------------
-_chat_cache = {}
-_chat_model_cache = None
-
-
-def _model_ids(url):
-    response = requests.get(f"{url}/models", timeout=10)
-    response.raise_for_status()
-    return [m["id"] for m in response.json()["data"]]
-
-
-def _chat_model():
-    global _chat_model_cache
-    if CHAT_MODEL:
-        return CHAT_MODEL
-    if _chat_model_cache is None:
-        try:
-            ids = [i for i in _model_ids(CHAT_URL) if "embed" not in i.lower()]
-        except Exception as exc:
-            raise HTTPException(status_code=503, detail=f"Chat server unavailable: {exc}") from exc
-        if not ids:
-            raise HTTPException(status_code=503, detail="Chat server lists no models")
-        _chat_model_cache = ids[0]
-    return _chat_model_cache
-
-
-def _chat(name, max_tokens=512):
-    key = (name, max_tokens)
-    if key not in _chat_cache:
-        _chat_cache[key] = ChatOpenAI(
-            base_url=CHAT_URL,
-            api_key="not-needed",
-            model=name,
-            temperature=0.2,
-            max_tokens=max_tokens,
-            timeout=600,  # first request to an unloaded model includes load time
-            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
-        )
-    return _chat_cache[key]
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +46,6 @@ CREATIVE = re.compile(
     r"creative writing|narrative)\b",
     re.I,
 )
-LETTER = re.compile(r"^\s*(?:write|draft|compose)\s+(?:me\s+)?(?:a|an)\s+letter\s+about\b", re.I)
 # Representative phrases for deciding whether a web-search tool is needed.
 ROUTE_EXAMPLES = {
     "search": [
@@ -162,7 +98,7 @@ def _route(q):
     """Return whether the web-search tool should run."""
     creative = bool(CREATIVE.search(q)) and not EXPLICIT_SEARCH.search(q)
     search = (
-        bool(SEARCH_HINTS.search(q) or LETTER.match(q) or is_headlines_request(q))
+        bool(SEARCH_HINTS.search(q) or is_letter_request(q) or is_headlines_request(q))
         and not creative
     )
     if not (search or creative):
@@ -192,9 +128,9 @@ def _is_bad(text):
 
 def _generate(messages):
     """Generate an answer using the configured chat model."""
-    model = _chat_model()
+    model = chat_model_id()
     try:
-        return _chat(model).invoke(messages), model
+        return chat_model().invoke(messages), model
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Model request failed: {exc}") from exc
 
@@ -256,24 +192,6 @@ def _history_messages(q, history):
     return messages
 
 
-# ---------------------------------------------------------------------------
-# Search + formatting
-# ---------------------------------------------------------------------------
-def _search_query(q):
-    if LETTER.match(q):
-        match = re.search(r"\babout\s+(.+)$", q, re.I)
-        if match:
-            return normalize_search_query(match.group(1).strip(" .?!,;:"))
-    return normalize_search_query(q)
-
-
-def _try_search(q, today):
-    try:
-        return search_web(_search_query(q), 5, today), None
-    except HTTPException as exc:
-        return [], str(exc.detail)
-
-
 def _result(answer, web, searched, error, local=(), model=None):
     return {
         "answer": answer,
@@ -317,7 +235,7 @@ def answer_question(
 
     wants_search = _route(q)
     searched = web_search_enabled and wants_search
-    web, error = _try_search(q, today) if searched else ([], None)
+    web, error = run_search(q, today) if searched else ([], None)
 
     cleanup_expired_temporary_collections()
     hits = {

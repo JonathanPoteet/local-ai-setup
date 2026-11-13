@@ -11,6 +11,12 @@ from xml.etree import ElementTree
 from fastapi import HTTPException
 
 
+LETTER_REQUEST = re.compile(
+    r"^\s*(?:write|draft|compose)\s+(?:me\s+)?(?:a|an)\s+letter\s+about\b",
+    re.I,
+)
+
+
 class SearchResultsParser(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
@@ -36,7 +42,7 @@ class SearchResultsParser(HTMLParser):
         elif self.capture:
             self.capture_depth += 1
 
-    def handle_endtag(self, tag):
+    def handle_endtag(self, _):
         if self.capture:
             self.capture_depth -= 1
             if self.capture_depth <= 0:
@@ -163,6 +169,28 @@ def normalize_search_query(query):
         flags=re.IGNORECASE,
     )
     return " ".join(query.split()).strip(" .?!,;:")
+
+
+def is_letter_request(query):
+    return bool(LETTER_REQUEST.match(query))
+
+
+def run_search(query, current_date, limit=5):
+    if is_letter_request(query):
+        match = re.search(r"\babout\s+(.+)$", query, re.I)
+        if match:
+            query = match.group(1).strip(" .?!,;:")
+    try:
+        return search_web(normalize_search_query(query), limit, current_date), None
+    except HTTPException as exc:
+        return [], str(exc.detail)
+
+
+def format_excerpts(results, limit=5):
+    return "\n\n".join(
+        f"- **{result['title']}**\n  {result['snippet']}\n  {result['url']}"
+        for result in results[:limit]
+    )
 
 
 def search_google_news(query, limit=5, current_date=None):

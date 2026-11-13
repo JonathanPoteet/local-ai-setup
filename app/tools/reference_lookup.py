@@ -4,7 +4,7 @@ from datetime import date
 
 from fastapi import HTTPException
 
-from tools.web_search import normalize_search_query, search_web
+from tools.web_search import format_excerpts, normalize_search_query, search_web
 
 
 _REFERENCE_LOOKUP = re.compile(r"^\s*tell\s+me\s+about\b", re.I)
@@ -12,13 +12,6 @@ _REFERENCE_LOOKUP = re.compile(r"^\s*tell\s+me\s+about\b", re.I)
 
 def matches(question):
     return bool(_REFERENCE_LOOKUP.match(question))
-
-
-def format_excerpts(results, limit=5):
-    return "\n\n".join(
-        f"- **{result['title']}**\n  {result['snippet']}\n  {result['url']}"
-        for result in results[:limit]
-    )
 
 
 def run(question: str, today: date):
