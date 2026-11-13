@@ -22,6 +22,13 @@ _REFERENCE_REQUEST = re.compile(
     r"^\s*(?:tell\s+me\s+about|give\s+me\s+(?:an?\s+)?overview\s+of)\b",
     re.I,
 )
+_LOCAL_RECOMMENDATION_REQUEST = re.compile(
+    r"\b(?:good|best|popular|nearby)\s+"
+    r"(?:places|restaurants|cafes|coffee\s+shops|stores|businesses)\b|"
+    r"\b(?:places|restaurants|cafes|coffee\s+shops|stores|businesses)\b"
+    r".{0,50}\b(?:near|nearby|in|around)\b",
+    re.I,
+)
 
 
 def _create_search_tool(name, description, search):
@@ -74,6 +81,8 @@ def preferred_web_tool(query):
     if _HEADLINES_REQUEST.search(query):
         return "headlines"
     if _EXPLICIT_SEARCH.search(query):
+        return "web_search"
+    if _LOCAL_RECOMMENDATION_REQUEST.search(query):
         return "web_search"
     if _REFERENCE_REQUEST.search(query):
         return "reference_lookup"
