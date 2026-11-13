@@ -1,5 +1,4 @@
 import hashlib
-import json
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -11,6 +10,7 @@ from langchain_core.tools import tool
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from runtime import embedder, embedding_model
+from tools.contracts import serialize_tool_result
 
 
 TEMPORARY_COLLECTION_DAYS = 7
@@ -187,15 +187,12 @@ def search_knowledge(query: str) -> str:
     """Search indexed local documents and saved web pages for relevant passages."""
     documents = persistent_documents(query, limit=4)
     documents.extend(search_temporary_documents(query, limit=4))
-    return json.dumps(
-        [
-            {
-                "source": document.metadata.get("source"),
-                "content": document.page_content,
-            }
-            for document in documents
-        ],
-        ensure_ascii=False,
+    return serialize_tool_result(
+        {
+            "source": document.metadata.get("source"),
+            "content": document.page_content,
+        }
+        for document in documents
     )
 
 
