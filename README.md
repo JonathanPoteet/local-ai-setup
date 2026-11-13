@@ -23,6 +23,9 @@ The chat model handles general questions. The app can also route requests to
 purpose-built tools, such as web search and headline lookup. Markdown and text
 files, plus text extracted from web pages, can be indexed as knowledge.
 
+For an overview of available tools and possible follow-up work, see
+[app/tools/README.md](app/tools/README.md).
+
 ## How it fits together
 
 ```text
