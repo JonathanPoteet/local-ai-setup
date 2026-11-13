@@ -57,6 +57,56 @@ CREATIVE = re.compile(
     r"creative writing|narrative)\b",
     re.I,
 )
+CREATIVE_REQUEST = re.compile(
+    r"\b(?:write|tell me|make up|create|compose|draft|imagine|brainstorm)\b.{0,80}"
+    r"\b(?:story|stories|fiction|poem|poetry|scene|screenplay|script|narrative)\b|"
+    r"\b(?:story|stories|fiction|poem|poetry|scene|screenplay|script|narrative)\b"
+    r".{0,40}\b(?:about|for|with)\b",
+    re.I,
+)
+EMOTIONAL_REQUEST = re.compile(
+    r"\b(?:i feel|i'm feeling|i am feeling|i've been feeling|"
+    r"i(?:'m| am) (?:sad|lonely|anxious|scared|overwhelmed|frustrated|upset|"
+    r"hurt|grieving|stressed|angry)|need to vent|need someone to listen|"
+    r"just listen|talk through my feelings|help me process)\b",
+    re.I,
+)
+SOCIAL_REQUEST = re.compile(
+    r"^\s*(?:(?:hi|hello|hey|good morning|good afternoon|good evening)[!.?\s]*|"
+    r"(?:how are you|how's it going|what's up|tell me about yourself|"
+    r"can we just chat)[?.!\s]*)$",
+    re.I,
+)
+REQUEST_TYPE_EXAMPLES = {
+    "practical": [
+        "Help me solve this problem.",
+        "How do I fix this error?",
+        "Give me steps to complete this task.",
+        "Compare these options and recommend one.",
+        "What should I do to accomplish this goal?",
+    ],
+    "emotional": [
+        "I feel overwhelmed and need someone to listen.",
+        "I'm sad and want to talk through my feelings.",
+        "I feel anxious about what happened.",
+        "I need support, not advice right now.",
+        "I'm frustrated and need help sorting out my emotions.",
+    ],
+    "social": [
+        "Hi, how are you?",
+        "Let's have a casual chat.",
+        "What's something fun you enjoy?",
+        "Tell me about yourself.",
+        "I just want to talk and get to know you.",
+    ],
+    "creative": [
+        "Write a story about a cat.",
+        "Help me brainstorm a poem.",
+        "Create an imaginative scene.",
+        "Write a fictional dialogue.",
+        "Let's come up with a creative idea.",
+    ],
+}
 # Representative phrases for deciding whether a web-search tool is needed.
 ROUTE_EXAMPLES = {
     "search": [
@@ -77,6 +127,7 @@ ROUTE_EXAMPLES = {
 SEMANTIC_THRESHOLD = 0.55  # tune against real queries; scores vary by embedding model
 MAX_TOOL_CALL_ROUNDS = 3
 _route_vecs = None
+_request_type_vecs = None
 _semantic_retry_at = 0.0
 
 
@@ -104,6 +155,38 @@ def _semantic_route(q):
         _log.warning("Semantic routing unavailable, using regex only: %s", exc)
         _semantic_retry_at = time.monotonic() + 60
         return None
+
+
+def _classify_request(q):
+    """Classify response style, leaving information retrieval to separate routing."""
+    global _request_type_vecs, _semantic_retry_at
+    if CREATIVE_REQUEST.search(q):
+        return "creative"
+    if EMOTIONAL_REQUEST.search(q):
+        return "emotional"
+    if SOCIAL_REQUEST.search(q):
+        return "social"
+    if not SEMANTIC_ROUTING or time.monotonic() < _semantic_retry_at:
+        return "practical"
+    try:
+        emb = embedder()
+        if _request_type_vecs is None:
+            _request_type_vecs = {
+                name: _unit(np.array(emb.embed_documents(examples)))
+                for name, examples in REQUEST_TYPE_EXAMPLES.items()
+            }
+        vector = _unit(np.array(emb.embed_query(q)))
+        scores = {
+            name: float((examples @ vector).max())
+            for name, examples in _request_type_vecs.items()
+        }
+        ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+        if ranked[0][1] >= 0.72 and ranked[0][1] - ranked[1][1] >= 0.035:
+            return ranked[0][0]
+    except Exception as exc:
+        _log.warning("Request-style classification unavailable, using practical style: %s", exc)
+        _semantic_retry_at = time.monotonic() + 60
+    return "practical"
 
 
 def _route(q):
@@ -138,9 +221,15 @@ def _is_bad(text):
     return not text.strip() or bool(REFUSAL.search(text))
 
 
-def _generate(messages):
+def _generate(messages, allow_tools=True):
     """Run a bounded model-driven tool loop and return the final answer and sources."""
     model = chat_model_id()
+    if not allow_tools:
+        try:
+            return chat_model().invoke(messages), model, []
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Model request failed: {exc}") from exc
+
     tools_by_name = {registered_tool.name: registered_tool for registered_tool in TOOLS}
     local_sources = []
     try:
@@ -188,8 +277,10 @@ def _generate(messages):
 # ---------------------------------------------------------------------------
 def _is_self_contained(q):
     standalone = re.match(
-        r"^\s*(?:tell\s+me\s+about|explain|describe|define|what\s+(?:is|are)|who\s+is|"
-        r"where\s+is|when\s+is|how\s+(?:does|do)|why\s+(?:does|do))\b",
+        r"^\s*(?:tell\s+me\s+(?:about|(?:a|an)\s+(?:\w+\s+)?(?:story|poem))|"
+        r"(?:write|draft|compose)\s+(?:me\s+)?(?:a|an)\s+(?:\w+\s+)?(?:story|poem)|"
+        r"explain|describe|define|what\s+(?:is|are)|who\s+is|where\s+is|when\s+is|"
+        r"how\s+(?:does|do)|why\s+(?:does|do))\b",
         q, re.I,
     )
     refers_back = re.search(
@@ -212,10 +303,33 @@ def _follow_up_search_query(q, history):
     return f"{topic} list" if topic else None
 
 
-def _system_prompt(today, timezone, web, searched, error):
+def _system_prompt(today, timezone, web, searched, error, request_type="practical"):
     date = f"Current date: {today.isoformat()}" + (f" ({timezone})" if timezone else "")
+    if request_type == "creative":
+        return (
+            f"{date}. This is a creative-writing request. Write a short, coherent original story "
+            "in about four to six sentences. Follow the user's requested subject and style, "
+            "and avoid repeating words or phrases. Do not search for or discuss documents or sources."
+        )
+
+    style_guidance = {
+        "practical": (
+            "Focus on the user's goal. Give a clear, useful answer or actionable steps, and ask "
+            "a focused clarifying question only when necessary."
+        ),
+        "emotional": (
+            "Respond with warmth and care. Acknowledge and validate feelings the user expresses "
+            "without assuming more than they said. Listen and help them explore; do not jump to "
+            "problem-solving unless they ask for advice."
+        ),
+        "social": (
+            "Be warm and conversational. Keep small talk natural and invite the user to continue "
+            "when appropriate. Do not claim to have human feelings, experiences, or a personal life."
+        ),
+    }[request_type]
     parts = [
         f"{date}. This is the authoritative date; a model's training cutoff is not today's date.\n\n"
+        f"{style_guidance}\n"
         "Use the search_knowledge tool when indexed documents may help answer the question; "
         "do not call it for unrelated general questions. When web results are provided, "
         "rely only on facts they support and cite their URLs. Never say you cannot browse: the "
@@ -238,8 +352,8 @@ def _system_prompt(today, timezone, web, searched, error):
     return "\n\n".join(parts)
 
 
-def _history_messages(q, history):
-    if _is_self_contained(q):
+def _history_messages(q, history, request_type="practical"):
+    if request_type == "creative" or _is_self_contained(q):
         return []
     messages = []
     for turn in history[-6:]:
@@ -251,7 +365,10 @@ def _history_messages(q, history):
     return messages
 
 
-def _result(answer, web, searched, error, local_sources=(), model=None):
+def _result(
+    answer, web, searched, error, local_sources=(), model=None,
+    request_type="practical",
+):
     return {
         "answer": answer,
         "sources": list(dict.fromkeys(local_sources))
@@ -260,6 +377,7 @@ def _result(answer, web, searched, error, local_sources=(), model=None):
         "web_search_performed": searched,
         "web_search_error": error,
         "model_used": model,
+        "request_type": request_type,
     }
 
 
@@ -285,13 +403,16 @@ def answer_question(
     if any(turn.role not in ("user", "assistant") for turn in history):
         raise HTTPException(status_code=400, detail="Chat history roles must be user or assistant")
     today = _parse_date(client_date)
+    request_type = _classify_request(q)
 
     if is_headlines_request(q):
         answer, web, error = run_headlines(today, web_search_enabled)
-        return _result(answer, web, web_search_enabled, error)
+        return _result(
+            answer, web, web_search_enabled, error, request_type=request_type
+        )
     if web_search_enabled and is_reference_lookup(q):
         answer, web, error = run_reference_lookup(q, today)
-        return _result(answer, web, True, error)
+        return _result(answer, web, True, error, request_type=request_type)
 
     follow_up_query = _follow_up_search_query(q, history)
     wants_search = bool(follow_up_query) or _route(q)
@@ -306,20 +427,24 @@ def answer_question(
             "Here are relevant search results:\n\n"
         )
         answer = lead + format_excerpts(web)
-        return _result(answer, web, True, error)
+        return _result(answer, web, True, error, request_type=request_type)
 
     cleanup_expired_temporary_collections()
 
     messages = [SystemMessage(content=_system_prompt(
-        today, client_timezone, web, searched, error
+        today, client_timezone, web, searched, error, request_type
     ))]
-    messages += _history_messages(q, history)
+    messages += _history_messages(q, history, request_type)
     messages.append(HumanMessage(content=q))
 
-    response, model, local_sources = _generate(messages)
+    response, model, local_sources = _generate(
+        messages, allow_tools=request_type != "creative"
+    )
     answer = response.content.strip()
     if web and _is_bad(answer):
         answer = "I searched the web for your question. Here are the relevant results:\n\n" + format_excerpts(web)
     elif not answer:
         answer = "The model returned an empty answer. Try rephrasing, or check the llama server logs."
-    return _result(answer, web, searched, error, local_sources, model)
+    return _result(
+        answer, web, searched, error, local_sources, model, request_type
+    )
