@@ -9,6 +9,8 @@ def serialize_tool_result(results=(), error=None):
             "snippet": result.get("snippet") or result.get("content", ""),
             "source": result.get("source"),
             "published": result.get("published"),
+            "page_inspected": result.get("page_inspected", False),
+            "page_inspection_error": result.get("page_inspection_error"),
         }
         for result in results
     ]

@@ -9,6 +9,8 @@ from langchain_core.documents import Document
 
 
 MAX_URL_BYTES = 2 * 1024 * 1024
+MAX_SEARCH_PAGE_INSPECTIONS = 5
+MAX_SEARCH_PAGE_EXCERPT_CHARS = 1500
 
 
 class PageTextParser(HTMLParser):
@@ -108,3 +110,27 @@ def fetch_page(url):
             raise HTTPException(status_code=422, detail="URL contained no extractable text")
         return Document(page_content=text, metadata={"source": current_url, "type": "url"})
     raise HTTPException(status_code=400, detail="Too many URL redirects")
+
+
+def inspect_search_results(results, limit=MAX_SEARCH_PAGE_INSPECTIONS):
+    inspected_results = []
+    for result in results:
+        inspected = dict(result)
+        inspected["page_inspected"] = False
+        inspected["page_inspection_error"] = None
+        if len(inspected_results) >= limit or not result.get("url"):
+            inspected_results.append(inspected)
+            continue
+        try:
+            page = fetch_page(result["url"])
+        except HTTPException as exc:
+            inspected["page_inspection_error"] = str(exc.detail)
+        else:
+            excerpt = page.page_content[:MAX_SEARCH_PAGE_EXCERPT_CHARS]
+            inspected["snippet"] = "Page content: " + excerpt
+            if len(page.page_content) > MAX_SEARCH_PAGE_EXCERPT_CHARS:
+                inspected["snippet"] += "…"
+            inspected["url"] = page.metadata["source"]
+            inspected["page_inspected"] = True
+        inspected_results.append(inspected)
+    return inspected_results

@@ -19,6 +19,9 @@ not apply are `null`. The UI's page-fetch action remains a direct user action,
 not an agent tool.
 Chat responses expose selected tool names in `tools_used`; web-tool usage is
 also reflected by `web_search_performed`.
+Local-place searches inspect up to five result pages using the same public-URL,
+redirect, content-type, and response-size safeguards as page fetching. Sites
+that block extraction are identified in the returned evidence.
 
 ## Exploratory TODOs
 

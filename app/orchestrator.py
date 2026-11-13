@@ -12,7 +12,12 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 
 from runtime import chat_model, chat_model_id, embedder
 from tools.knowledge import cleanup_expired_temporary_collections
-from tools.registry import WEB_TOOL_NAMES, create_tools, preferred_web_tool
+from tools.registry import (
+    WEB_TOOL_NAMES,
+    create_tools,
+    is_local_recommendation,
+    preferred_web_tool,
+)
 
 _log = logging.getLogger(__name__)
 SEMANTIC_ROUTING = os.environ.get("SEMANTIC_ROUTING", "1") != "0"
@@ -317,6 +322,48 @@ def _result(
     }
 
 
+def _summarize_local_recommendations(query, results):
+    evidence = [
+        {
+            "title": result["title"],
+            "url": result["url"],
+            "page_inspected": result.get("page_inspected", False),
+            "page_inspection_error": result.get("page_inspection_error"),
+            "content": result["snippet"],
+        }
+        for result in results
+    ]
+    try:
+        response = chat_model().invoke(
+            [
+                SystemMessage(
+                    content=(
+                        "Answer the local-place recommendation using only the supplied web "
+                        "search snippets and inspected page excerpts. Name a place only if it "
+                        "appears in that evidence. Never invent addresses, hours, prices, "
+                        "menus, ratings, or availability. Prefer inspected page content. If "
+                        "a page could not be inspected, say so and treat its search snippet "
+                        "as unverified. Cite the source URL for each suggested place. If the "
+                        "evidence is weak or does not show specific places, say that clearly "
+                        "instead of guessing. Give at most three distinct suggestions, avoid "
+                        "repeating a place, and be concise."
+                    )
+                ),
+                HumanMessage(
+                    content=(
+                        f"User request: {query}\n\n"
+                        f"Search and page evidence:\n{json.dumps(evidence, ensure_ascii=False)}"
+                    )
+                ),
+            ]
+        )
+    except Exception as exc:
+        _log.warning("Could not summarize inspected place results: %s", exc)
+        return None
+    answer = response.content.strip()
+    return answer if answer and not _is_bad(answer) else None
+
+
 def _run_explicit_tool(tool, query):
     try:
         payload = json.loads(tool.invoke({"query": query}))
@@ -340,12 +387,21 @@ def _run_explicit_tool(tool, query):
     if error:
         answer = f"{tool.name.replace('_', ' ').capitalize()} failed: {error}"
     elif results:
-        answer = "\n\n".join(
-            f"- **{result['title']}**\n"
-            f"  {result['snippet']}\n"
-            f"  {result['url']}"
-            for result in results[:5]
-        )
+        answer = None
+        if tool.name == "web_search" and is_local_recommendation(query):
+            answer = _summarize_local_recommendations(query, results)
+        if answer is None:
+            answer = "\n\n".join(
+                f"- **{result['title']}**\n"
+                f"  {result['snippet']}\n"
+                + (
+                    f"  Page inspection unavailable: {result['page_inspection_error']}\n"
+                    if result.get("page_inspection_error") else
+                    ""
+                )
+                + f"  {result['url']}"
+                for result in results[:5]
+            )
     else:
         answer = f"{tool.name.replace('_', ' ').capitalize()} returned no relevant results."
     return answer, results, error

@@ -7,6 +7,7 @@ from langchain_core.tools import StructuredTool
 from tools.contracts import serialize_tool_result
 from tools.headlines import search_headlines
 from tools.knowledge import search_knowledge
+from tools.page_fetch import inspect_search_results
 from tools.reference_lookup import search_references
 from tools.web_search import search_web
 
@@ -65,7 +66,11 @@ def create_tools(today: date, web_search_enabled=True, query=""):
                 "web_search",
                 "Search the public web for general information or an explicitly requested "
                 "online lookup. Query should be a concise search phrase.",
-                lambda query: search_web(query, 5, today),
+                lambda query: search_web_with_page_inspection(
+                    query,
+                    today,
+                    inspect=is_local_recommendation(query),
+                ),
             ),
         }
         preferred_tool = preferred_web_tool(query)
@@ -75,6 +80,11 @@ def create_tools(today: date, web_search_enabled=True, query=""):
         else:
             tools.extend(web_tools.values())
     return tools
+
+
+def search_web_with_page_inspection(query, today, inspect=False):
+    results = search_web(query, 5, today)
+    return inspect_search_results(results) if inspect else results
 
 
 def preferred_web_tool(query):
@@ -87,3 +97,7 @@ def preferred_web_tool(query):
     if _REFERENCE_REQUEST.search(query):
         return "reference_lookup"
     return None
+
+
+def is_local_recommendation(query):
+    return _LOCAL_RECOMMENDATION_REQUEST.search(query) is not None
