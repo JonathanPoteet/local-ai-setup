@@ -265,13 +265,45 @@
         return data;
       }
 
-      function createChat() {
+      async function createChat() {
         const chat = { id: newChatId(), title: "New chat", updatedAt: Date.now(), messages: [] };
         conversations.unshift(chat);
         activeId = chat.id;
         save();
         render();
+        try {
+          await persistConversation(chat);
+        } catch (error) {
+          setStatus(`Chat created in this browser but could not be saved on the server: ${error.message}`, true);
+        }
         elements.prompt.focus();
+        return chat;
+      }
+
+      function persistConversation(chat) {
+        return api(`/conversations/${encodeURIComponent(chat.id)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(chat)
+        });
+      }
+
+      async function synchronizeConversations() {
+        const localConversations = [...conversations];
+        if (localConversations.length) {
+          await api("/conversations/import", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ conversations: localConversations })
+          });
+        }
+        const sharedConversations = await api("/conversations");
+        conversations.splice(0, conversations.length, ...sharedConversations);
+        if (!conversations.some(chat => chat.id === activeId)) {
+          activeId = conversations[0]?.id || null;
+        }
+        save();
+        render();
       }
 
       function addSourceLinks(container, sources) {
@@ -314,7 +346,7 @@
           remove.type = "button";
           remove.className = "chat-remove";
           remove.textContent = "×";
-          remove.title = "Delete chat transcript from this browser";
+          remove.title = "Delete shared chat";
           remove.setAttribute("aria-label", `Delete ${chat.title || "chat"}`);
           remove.addEventListener("click", () => deleteChat(chat.id));
           row.append(select, remove);
@@ -364,11 +396,17 @@
       async function deleteChat(id) {
         const index = conversations.findIndex(item => item.id === id);
         if (index < 0) return;
+        try {
+          await api(`/conversations/${encodeURIComponent(id)}`, { method: "DELETE" });
+        } catch (error) {
+          setStatus(`Could not delete the shared chat: ${error.message}`, true);
+          return;
+        }
         conversations.splice(index, 1);
         if (activeId === id) activeId = conversations[0]?.id || null;
         save();
         render();
-        setStatus("Chat transcript deleted from this browser. Shared temporary documents expire after 7 days.");
+        setStatus("Shared chat deleted.");
       }
 
       async function sendMessage(text) {
@@ -388,7 +426,13 @@
         sending = true;
         elements.send.disabled = true;
         setStatus("Thinking…");
+        let persistenceError = null;
         try {
+          try {
+            await persistConversation(chat);
+          } catch (error) {
+            persistenceError = error;
+          }
           const clientNow = new Date();
           const data = await api("/chat", {
             method: "POST",
@@ -409,12 +453,25 @@
           chat.messages.push({ role: "assistant", content: data.answer, sources: data.sources || [] });
           chat.updatedAt = Date.now();
           save();
-          setStatus(data.web_search_error
-            ? `Answer ready, but web search failed: ${data.web_search_error}`
-            : "");
+          try {
+            await persistConversation(chat);
+          } catch (error) {
+            persistenceError = error;
+          }
+          setStatus(persistenceError
+            ? `Answer ready, but chat could not be saved on the server: ${persistenceError.message}`
+            : data.web_search_error
+              ? `Answer ready, but web search failed: ${data.web_search_error}`
+              : "", Boolean(persistenceError));
         } catch (error) {
           chat.messages.push({ role: "assistant", content: `Sorry, the request failed: ${error.message}` });
-          setStatus(error.message, true);
+          save();
+          try {
+            await persistConversation(chat);
+            setStatus(error.message, true);
+          } catch (saveError) {
+            setStatus(`${error.message} Chat could not be saved: ${saveError.message}`, true);
+          }
         } finally {
           sending = false;
           elements.send.disabled = false;
@@ -423,12 +480,16 @@
         }
       }
 
-      document.getElementById("new-chat").addEventListener("click", createChat);
-      document.getElementById("chat-form").addEventListener("submit", event => {
+      document.getElementById("new-chat").addEventListener("click", async () => {
+        await conversationsReady;
+        await createChat();
+      });
+      document.getElementById("chat-form").addEventListener("submit", async event => {
         event.preventDefault();
         const text = elements.prompt.value;
         if (!text.trim()) return;
-        if (!currentChat()) createChat();
+        await conversationsReady;
+        if (!currentChat()) await createChat();
         elements.prompt.value = "";
         elements.prompt.style.height = "auto";
         sendMessage(text);
@@ -498,6 +559,9 @@
 
       if (!currentChat() && conversations.length) activeId = conversations[0].id;
       render();
+      const conversationsReady = synchronizeConversations().catch(error => {
+        setStatus(`Could not load shared chats; showing this browser's saved copy: ${error.message}`, true);
+      });
     })();
   </script>
 </body>

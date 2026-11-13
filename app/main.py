@@ -3,11 +3,18 @@ import logging
 from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from conversations import (
+    delete_conversation,
+    initialize_chat_store,
+    list_conversations,
+    save_conversation,
+)
 from orchestrator import answer_question
 from tools.knowledge import (
     TEMPORARY_COLLECTION_DAYS,
@@ -39,6 +46,23 @@ class ChatRequest(BaseModel):
     client_timezone: str | None = Field(default=None, max_length=100)
 
 
+class StoredMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(max_length=100000)
+    sources: list[str] = Field(default_factory=list, max_length=20)
+
+
+class ConversationRecord(BaseModel):
+    id: str = Field(min_length=1, max_length=100)
+    title: str = Field(max_length=200)
+    updatedAt: int
+    messages: list[StoredMessage] = Field(max_length=2000)
+
+
+class ConversationImport(BaseModel):
+    conversations: list[ConversationRecord] = Field(max_length=500)
+
+
 async def periodic_temporary_collection_cleanup():
     while True:
         await asyncio.to_thread(cleanup_expired_temporary_collections)
@@ -59,6 +83,7 @@ def report_cleanup_failure(task):
 @app.on_event("startup")
 async def start_temporary_collection_cleanup():
     global _cleanup_task
+    initialize_chat_store()
     _cleanup_task = asyncio.create_task(periodic_temporary_collection_cleanup())
     _cleanup_task.add_done_callback(report_cleanup_failure)
 
@@ -99,6 +124,35 @@ def web_search(q: str):
 @app.delete("/temporary")
 def clear_temporary_documents():
     return delete_temporary_documents()
+
+
+@app.get("/conversations")
+def get_conversations():
+    return list_conversations()
+
+
+@app.post("/conversations/import")
+def import_conversations(request: ConversationImport):
+    imported = sum(
+        save_conversation(conversation, only_if_missing=True)
+        for conversation in request.conversations
+    )
+    return {"imported": imported}
+
+
+@app.put("/conversations/{conversation_id}")
+def put_conversation(conversation_id: str, conversation: ConversationRecord):
+    if conversation_id != conversation.id:
+        raise HTTPException(status_code=400, detail="Conversation ID does not match URL")
+    save_conversation(conversation)
+    return {"saved": True}
+
+
+@app.delete("/conversations/{conversation_id}")
+def remove_conversation(conversation_id: str):
+    if not delete_conversation(conversation_id):
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"deleted": True}
 
 
 @app.get("/")

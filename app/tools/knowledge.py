@@ -1,5 +1,5 @@
 import hashlib
-import os
+import json
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import chromadb
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import DirectoryLoader, TextLoader
-from langchain_core.documents import Document
+from langchain_core.tools import tool
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from runtime import embedder, embedding_model
@@ -158,7 +158,7 @@ def search_temporary_documents(query, limit=4):
         if result[1] >= MIN_KNOWLEDGE_RELEVANCE
     ]
     scored_documents.sort(key=lambda result: result[1], reverse=True)
-    return [document for document, _score in scored_documents[:limit]]
+    return [document for document, _ in scored_documents[:limit]]
 
 
 def delete_temporary_documents():
@@ -180,6 +180,23 @@ def persistent_documents(query, limit=4):
         for document, score in results
         if score >= MIN_KNOWLEDGE_RELEVANCE
     ]
+
+
+@tool
+def search_knowledge(query: str) -> str:
+    """Search indexed local documents and saved web pages for relevant passages."""
+    documents = persistent_documents(query, limit=4)
+    documents.extend(search_temporary_documents(query, limit=4))
+    return json.dumps(
+        [
+            {
+                "source": document.metadata.get("source"),
+                "content": document.page_content,
+            }
+            for document in documents
+        ],
+        ensure_ascii=False,
+    )
 
 
 def all_document_sources(persistent_hits, temporary_hits):

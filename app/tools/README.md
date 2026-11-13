@@ -1,9 +1,9 @@
 # Tools
 
-The current app routes requests to purpose-built tools using rules and embedding
-similarity, or starts them from the UI. A goal for this project is to evolve
-toward a model-driven agent that can choose among registered tools based on the
-conversation. Tool access will still be limited and validated by the
+The app currently uses rules and embedding similarity for web-search routing,
+and offers UI actions for indexing and page fetching. Normal chat now has an
+initial model-driven agent experiment: the model can choose whether to search
+indexed local knowledge. Tool access remains limited and validated by the
 application.
 
 | Tool | What it does | Network |
@@ -22,8 +22,10 @@ These are possible next steps, not a committed roadmap:
   tools, and returning answers, sources, and errors.
 - [ ] Add focused tests for tool routing, successful results, disabled tools,
   and provider failures.
-- [ ] Explore model-driven tool calling with a local model that supports it;
-  keep tool permissions and input validation in application code.
+- [x] Verify model-driven tool calling with the local model and register one
+  read-only knowledge-search tool.
+- [ ] Expand model-driven selection to additional registered tools while
+  keeping tool permissions and input validation in application code.
 - [ ] Choose a concrete first machine-learning tool use case before adding
   another model or dependency. Possible directions include text
   classification, extraction, or reranking.

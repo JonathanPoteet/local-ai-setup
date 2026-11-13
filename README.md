@@ -92,8 +92,12 @@ servers expose OpenAI-compatible APIs internally at ports `8081` (chat) and
 - **Manage temporary knowledge:** Use **Clear temporary** to remove temporary
   collections. Otherwise they expire after seven days.
 
-The browser stores chat transcripts locally. ChromaDB data is stored in
-`chroma/`, which is ignored by Git.
+Chat transcripts are shared between browsers and stored in SQLite at
+`/data/chats.sqlite3` inside the app container. The database is persisted under
+`chroma/` on the host, alongside the ChromaDB data. Existing browser-cached
+conversations are imported into the server store when the UI first loads.
+Conversation history is shared by anyone who can access this app; there are no
+per-user accounts.
 
 ## Configuration
 
