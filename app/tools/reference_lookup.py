@@ -5,6 +5,8 @@ from urllib.parse import quote
 import requests
 from fastapi import HTTPException
 
+from tools.web_search import normalize_search_query
+
 
 _SEARCH_URL = "https://en.wikipedia.org/w/rest.php/v1/search/page"
 _USER_AGENT = "LocalSetup/1.0 (local reference lookup)"
@@ -29,7 +31,7 @@ def search_references(query: str):
     try:
         response = requests.get(
             _SEARCH_URL,
-            params={"q": query.strip(), "limit": 5},
+            params={"q": normalize_search_query(query) or query.strip(), "limit": 5},
             headers={"User-Agent": _USER_AGENT},
             timeout=(5, 15),
         )

@@ -317,6 +317,40 @@ def _result(
     }
 
 
+def _run_explicit_tool(tool, query):
+    try:
+        payload = json.loads(tool.invoke({"query": query}))
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Tool {tool.name} returned an invalid result",
+        ) from exc
+    if (
+        not isinstance(payload, dict)
+        or payload.get("status") not in ("ok", "error")
+        or not isinstance(payload.get("results"), list)
+    ):
+        raise HTTPException(
+            status_code=502,
+            detail=f"Tool {tool.name} violated the standard result contract",
+        )
+
+    results = payload["results"]
+    error = payload.get("error")
+    if error:
+        answer = f"{tool.name.replace('_', ' ').capitalize()} failed: {error}"
+    elif results:
+        answer = "\n\n".join(
+            f"- **{result['title']}**\n"
+            f"  {result['snippet']}\n"
+            f"  {result['url']}"
+            for result in results[:5]
+        )
+    else:
+        answer = f"{tool.name.replace('_', ' ').capitalize()} returned no relevant results."
+    return answer, results, error
+
+
 def _parse_date(client_date):
     try:
         if client_date:
@@ -351,6 +385,20 @@ def answer_question(
         if web_search_enabled and request_type != "creative"
         else None
     )
+    if forced_tool:
+        selected_tool = next(
+            tool for tool in tools if tool.name == forced_tool
+        )
+        answer, web, error = _run_explicit_tool(selected_tool, q)
+        return _result(
+            answer,
+            web,
+            True,
+            error,
+            request_type=request_type,
+            tools_used=[forced_tool],
+        )
+
     messages = [
         SystemMessage(content=_system_prompt(today, client_timezone, request_type))
     ]
@@ -365,7 +413,7 @@ def answer_question(
         searched,
         error,
         tools_used,
-    ) = _generate(messages, tools, forced_tool)
+    ) = _generate(messages, tools)
     answer = response.content.strip()
     if _is_bad(answer) and web:
         answer = "I found these relevant web results:\n\n" + "\n\n".join(
