@@ -258,6 +258,21 @@ def search_web(query, limit=5, current_date=None):
             detail="Current news search returned no recent articles",
         )
 
+    if re.search(r"\bnews\b", query, re.IGNORECASE):
+        try:
+            results = search_google_news(query, limit, current_date)
+            if results:
+                return results
+        except (requests.RequestException, ElementTree.ParseError) as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"News search failed: {exc}",
+            ) from exc
+        raise HTTPException(
+            status_code=502,
+            detail=f"News search returned no recent articles for: {query}",
+        )
+
     errors = []
     providers = (
         ("DuckDuckGo", "https://html.duckduckgo.com/html/", parse_duckduckgo_results),

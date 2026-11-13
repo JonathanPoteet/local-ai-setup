@@ -20,7 +20,12 @@ from tools.reference_lookup import (
     matches as is_reference_lookup,
     run as run_reference_lookup,
 )
-from tools.web_search import format_excerpts, is_letter_request, run_search
+from tools.web_search import (
+    format_excerpts,
+    is_letter_request,
+    normalize_search_query,
+    run_search,
+)
 
 _log = logging.getLogger(__name__)
 SEMANTIC_ROUTING = os.environ.get("SEMANTIC_ROUTING", "1") != "0"
@@ -40,6 +45,11 @@ SEARCH_HINTS = re.compile(
 EXPLICIT_SEARCH = re.compile(
     r"\b(search (?:the )?(?:web|online)|web search|look ?up|look online|check online|"
     r"browse|google|find (?:this )?online)\b",
+    re.I,
+)
+MORE_RESULTS_FOLLOW_UP = re.compile(
+    r"\b(?:there(?:'s| are)?\s+more|more\s+than\s+(?:just\s+)?(?:that|those|these)|"
+    r"what\s+else|tell\s+me\s+more|list\s+more|more\s+(?:examples|options|details|information))\b",
     re.I,
 )
 CREATIVE = re.compile(
@@ -190,6 +200,18 @@ def _is_self_contained(q):
     return bool(standalone and not refers_back)
 
 
+def _follow_up_search_query(q, history):
+    if not MORE_RESULTS_FOLLOW_UP.search(q):
+        return None
+
+    previous_user_turns = [turn.content for turn in history if turn.role == "user"]
+    if not previous_user_turns or not SEARCH_HINTS.search(previous_user_turns[-1]):
+        return None
+
+    topic = normalize_search_query(previous_user_turns[-1])
+    return f"{topic} list" if topic else None
+
+
 def _system_prompt(today, timezone, web, searched, error):
     date = f"Current date: {today.isoformat()}" + (f" ({timezone})" if timezone else "")
     parts = [
@@ -271,9 +293,20 @@ def answer_question(
         answer, web, error = run_reference_lookup(q, today)
         return _result(answer, web, True, error)
 
-    wants_search = _route(q)
+    follow_up_query = _follow_up_search_query(q, history)
+    wants_search = bool(follow_up_query) or _route(q)
     searched = web_search_enabled and wants_search
-    web, error = run_search(q, today) if searched else ([], None)
+    search_query = follow_up_query or q
+    web, error = run_search(search_query, today) if searched else ([], None)
+
+    if searched and web and (EXPLICIT_SEARCH.search(q) or follow_up_query):
+        lead = (
+            "You're right - there are many. Here are search results with more examples:\n\n"
+            if follow_up_query else
+            "Here are relevant search results:\n\n"
+        )
+        answer = lead + format_excerpts(web)
+        return _result(answer, web, True, error)
 
     cleanup_expired_temporary_collections()
 
