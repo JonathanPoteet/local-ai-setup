@@ -38,4 +38,10 @@ These are possible next steps, not a committed roadmap:
   classification, extraction, or reranking.
 - [ ] Make tool selection and availability easier to inspect and tune without
   changing normal chat behavior.
+- [ ] Evaluate [Aurelio Labs Semantic Router](https://github.com/aurelio-labs/semantic-router)
+  as a possible future routing layer for choosing between tools and chat;
+  compare its decisions against real requests before adopting it.
+- [ ] Evaluate Jev, BEND, and LEAN as possible decision-making approaches
+  for improving request and tool selection; compare their accuracy, latency,
+  and deployment requirements before adopting one.
 - [ ] Document which tools need network access, local models, or indexed data.
