@@ -44,4 +44,5 @@ These are possible next steps, not a committed roadmap:
 - [ ] Evaluate Jev, BEND, and LEAN as possible decision-making approaches
   for improving request and tool selection; compare their accuracy, latency,
   and deployment requirements before adopting one.
+  https://lean-lang.org/, https://bend-lang.com/, https://www.langchain.com/blog/building-a-harness-with-jev
 - [ ] Document which tools need network access, local models, or indexed data.
