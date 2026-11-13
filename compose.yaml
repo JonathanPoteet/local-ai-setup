@@ -1,0 +1,88 @@
+services:
+  llama:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    network_mode: "service:tailscale"
+    volumes:
+      - type: bind
+        source: D:/AI-Models
+        target: /models
+    devices:
+      - "/dev/dxg:/dev/dxg"
+    environment:
+     - LLAMA_CACHE=/models
+    command: >
+      --models-dir /models
+      --models-max 1
+      --host 127.0.0.1
+      --port 8081
+      -c 8192
+      -ngl 99
+    depends_on:
+      - tailscale
+
+  llama-embed:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    network_mode: "service:tailscale"
+    volumes:
+      - type: bind
+        source: D:/AI-Models
+        target: /models
+    environment:
+     - LLAMA_CACHE=/models/embeddings
+    devices:
+      - "/dev/dxg:/dev/dxg"
+    command: >
+      --models-dir /models/embeddings
+      --models-max 1
+      --embeddings
+      --host 127.0.0.1
+      --port 8082
+      -c 2048
+      -ngl 99
+    depends_on:
+      - tailscale
+
+
+  tailscale:
+    image: tailscale/tailscale:stable
+    container_name: tailscale
+    hostname: local-ai-node
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY:?Set TS_AUTHKEY in .env}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_USERSPACE=false
+      - TS_SERVE_CONFIG=/config/serve.json
+    volumes:
+      - tailscale-data:/var/lib/tailscale
+      - .:/config:ro
+    restart: unless-stopped
+    network_mode: "host"
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+    - NET_ADMIN
+    - NET_RAW
+    privileged: true
+    entrypoint:
+      - sh
+      - -c
+      - |
+        ip link set dev eth0 mtu 1500
+        exec /usr/local/bin/containerboot
+
+  langchain-app:
+    image: python:3.11-slim
+    network_mode: "service:tailscale"
+    volumes:
+      - ./app:/app
+      - ./docs:/docs
+      - ./chroma:/data
+    working_dir: /app
+    command: >
+      sh -c "pip install -q fastapi uvicorn requests langchain-openai
+      langchain-chroma langchain-community langchain-text-splitters &&
+      uvicorn main:app --host 127.0.0.1 --port 8000"
+    depends_on: [llama, llama-embed, tailscale]
+
+volumes:
+  tailscale-data:

@@ -1,0 +1,36 @@
+{
+  "Services": {
+    "svc:open-ui": {
+      "TCP": {
+        "443": {
+          "HTTPS": true
+        },
+        "80": {
+          "HTTP": true
+        },
+        "8443": {
+          "HTTPS": true
+        }
+      },
+      "Web": {
+        "open-ui.tail2fa3a6.ts.net:443": {
+          "Handlers": {
+            "/": {
+              "Proxy": "http://localhost:8000"
+            }
+          }
+        },
+        "open-ui.tail2fa3a6.ts.net:80": {
+          "Handlers": {
+            "/": {
+              "Proxy": "http://localhost:8000"
+            }
+          }
+        },
+        "open-ui.tail2fa3a6.ts.net:8443": {
+          "Handlers": { "/": {                     "Proxy": "http://localhost:8000" } }
+        }
+      }
+    }
+  }
+}
