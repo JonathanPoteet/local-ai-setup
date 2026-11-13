@@ -11,7 +11,7 @@ Environment variables (all optional):
   EMBED_BASE_URL  default http://127.0.0.1:8082/v1
   CHAT_MODEL      chat model id (default: first non-embedding model)
   SMALL_MODEL     legacy alias for CHAT_MODEL
-  EMBED_MODEL     embedding model id for semantic routing (default: last id listed)
+  EMBED_MODEL     embedding model id (default: last id listed)
   SEMANTIC_ROUTING  set to 0 to use regex routing only
 """
 import logging
@@ -24,8 +24,9 @@ import numpy as np
 import requests
 from fastapi import HTTPException
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_openai import ChatOpenAI
 
+from runtime import embedder
 from tools.knowledge import (
     cleanup_expired_temporary_collections,
     persistent_documents,
@@ -42,9 +43,7 @@ from tools.web_search import normalize_search_query, search_web
 _log = logging.getLogger(__name__)
 
 CHAT_URL = os.environ.get("CHAT_BASE_URL", "http://127.0.0.1:8081/v1")
-EMBED_URL = os.environ.get("EMBED_BASE_URL", "http://127.0.0.1:8082/v1")
 CHAT_MODEL = os.environ.get("CHAT_MODEL") or os.environ.get("SMALL_MODEL")
-EMBED_MODEL = os.environ.get("EMBED_MODEL")
 SEMANTIC_ROUTING = os.environ.get("SEMANTIC_ROUTING", "1") != "0"
 
 # ---------------------------------------------------------------------------
@@ -52,7 +51,6 @@ SEMANTIC_ROUTING = os.environ.get("SEMANTIC_ROUTING", "1") != "0"
 # ---------------------------------------------------------------------------
 _chat_cache = {}
 _chat_model_cache = None
-_embedder_cache = None
 
 
 def _model_ids(url):
@@ -89,17 +87,6 @@ def _chat(name, max_tokens=512):
             extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         )
     return _chat_cache[key]
-
-
-def _embedder():
-    global _embedder_cache
-    if _embedder_cache is None:
-        model = EMBED_MODEL or _model_ids(EMBED_URL)[-1]
-        _embedder_cache = OpenAIEmbeddings(
-            base_url=EMBED_URL, api_key="not-needed", model=model,
-            check_embedding_ctx_length=False,
-        )
-    return _embedder_cache
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +142,7 @@ def _semantic_route(q):
     if not SEMANTIC_ROUTING or time.monotonic() < _semantic_retry_at:
         return None
     try:
-        emb = _embedder()
+        emb = embedder()
         if _route_vecs is None:
             _route_vecs = {
                 name: _unit(np.array(emb.embed_documents(examples)))

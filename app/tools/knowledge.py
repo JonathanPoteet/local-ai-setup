@@ -8,10 +8,9 @@ import chromadb
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain_core.documents import Document
-from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from runtime import EMBED_URL, model_ids
+from runtime import embedder, embedding_model
 
 
 TEMPORARY_COLLECTION_DAYS = 7
@@ -27,7 +26,7 @@ def temporary_collection_prefix(model):
 
 
 def store(temporary=False, collection_date=None):
-    model = os.environ.get("EMBED_MODEL") or model_ids(EMBED_URL)[-1]
+    model = embedding_model()
     if temporary:
         if collection_date is None:
             collection_date = datetime.now(timezone.utc).date()
@@ -36,15 +35,9 @@ def store(temporary=False, collection_date=None):
         name = re.sub(r"[^a-zA-Z0-9_-]", "-", f"docs-{model}")[:63]
     key = (model, name)
     if key not in _stores:
-        embeddings = OpenAIEmbeddings(
-            base_url=EMBED_URL,
-            api_key="x",
-            model=model,
-            check_embedding_ctx_length=False,
-        )
         _stores[key] = Chroma(
             collection_name=name,
-            embedding_function=embeddings,
+            embedding_function=embedder(),
             persist_directory="/data",
         )
     return _stores[key]
@@ -137,7 +130,7 @@ def ingest_documents():
 
 
 def search_temporary_documents(query, limit=4):
-    model = os.environ.get("EMBED_MODEL") or model_ids(EMBED_URL)[-1]
+    model = embedding_model()
     prefix = temporary_collection_prefix(model)
     available = {collection.name for collection in _chroma_client.list_collections()}
     today = datetime.now(timezone.utc).date()
