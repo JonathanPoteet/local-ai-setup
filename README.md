@@ -143,4 +143,4 @@ its defaults.
 - The Tailscale auth key and Serve hostname must be configured for your own
   tailnet.
 
-Contributions, experiments, and ideas for a better local AI setup are welcome.
+Recommendations, and ideas for a better local AI setup are welcome.
